@@ -4,19 +4,26 @@ import logging
 import re
 import sys
 
+ALLOWED_EXTENSIONS = [".java", ".html", ".css", ".js", ".xml", "jsp"]
+keywords = ["security", "StpUtil", "shiro", "OAuth", "Permission"]
 
 class JavaScanner:
 
     def __init__(self, root_path, keywords):
         self.root_path = root_path
         self.keywords = keywords
+        self.results = []
 
     def read_java_file(self, file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            code = f.read()
-        return code
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
+            return code
+        except FileNotFoundError as e:
+            logging.warning(f"File not found: {file_path}")
+            return None
 
-    def scan_java_file(self, code):
+    def scan_java_file(self, code, file_path):
         found_keywords = {}
         current_method = None
         line_number = 1
@@ -28,13 +35,10 @@ class JavaScanner:
             for keyword in self.keywords:
                 keyword_regex = r"%s" % keyword
                 if re.search(keyword_regex, line) and current_method:
-                    if keyword not in found_keywords:
-                        found_keywords[keyword] = {}
-                    if current_method not in found_keywords[keyword]:
-                        found_keywords[keyword][current_method] = []
-                    found_keywords[keyword][current_method].append(line_number)
+                    found_keywords.setdefault(keyword, {}).setdefault(current_method, []).append(line_number)
             line_number += 1
-        return found_keywords
+        if found_keywords:
+            self.results.append((file_path, found_keywords))
 
     def scan_java_files(self):
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -52,19 +56,28 @@ class JavaScanner:
         for file_path, task in result:
             try:
                 code = task.result()
-                results = self.scan_java_file(code)
-                for keyword, methods in results.items():
-                    for method, line_numbers in methods.items():
-                        print(f"{file_path}-> {method}：{','.join(map(str, line_numbers))} = {keyword}")
+                if code is not None:
+                    self.scan_java_file(code, file_path)
             except Exception as e:
                 logging.error(e)
 
+    def generate_html_report(self, output_file="output.html"):
+        with open(output_file, "w", encoding="utf-8") as html_file:
+            html_file.write("<html><head><title>Java Code Scanner Results</title></head><body>")
+            for file_path, found_keywords in self.results:
+                html_file.write(f"<h4>{file_path}</h4>")
+                for keyword, methods in found_keywords.items():
+                    html_file.write(f"<h4>{keyword}</h4>")
+                    for method, line_numbers in methods.items():
+                        line_numbers_str = ','.join(map(str, line_numbers))
+                        html_file.write(
+                            f"<p>{method} -> {line_numbers_str} -> {keyword}</p>")
+            html_file.write("</body></html>")
+            logging.info(f"HTML report generated: {output_file}")
+
 
 if __name__ == "__main__":
-    ALLOWED_EXTENSIONS = [".java", ".html", ".css", ".js", ".xml", "jsp"]
-    root_path = sys.args[1]
-    keywords = [
-        "security", "StpUtil", "shiro", "OAuth", "Permission"
-    ]
+    root_path = sys.argv[1]
     scan = JavaScanner(root_path, keywords)
     scan.scan_java_files()
+    scan.generate_html_report(output_file="output.html")
